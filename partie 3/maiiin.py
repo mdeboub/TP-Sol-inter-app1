@@ -1,43 +1,66 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
+from enum import Enum
 import json
-from typing import List
 import os
 
-app = FastAPI()
+class Niveau(str, Enum):
+    FAIBLE = "Faible"
+    MOYEN = "Moyen"
+    FORT = "Fort"
 
-# Modèle de données
-class Personnage(BaseModel):
+class PersonnageInput(BaseModel):
     nom: str
     score: int
 
-# Fichier de stockage
-WEBHOOK_LOG = "webhook_log.json"
+class PersonnageOutput(PersonnageInput):
+    niveau: Niveau
 
-@app.post("/webhook/personnage")
-async def recevoir_personnage(p: Personnage):
-    # Étape 1 : Ajout du champ niveau
-    niveau = "Débutant" if p.score < 50 else "Intermédiaire" if p.score < 80 else "Expert"
-    personnage_enrichi = {**p.dict(), "niveau": niveau}
-    
-    # Étape 2 : Enregistrement dans le fichier JSON
-    try:
-        donnees_existantes = []
-        if os.path.exists(WEBHOOK_LOG):
-            with open(WEBHOOK_LOG, "r") as f:
-                donnees_existantes = json.load(f)
-        
-        donnees_existantes.append(personnage_enrichi)
-        
-        with open(WEBHOOK_LOG, "w") as f:
-            json.dump(donnees_existantes, f, indent=2)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur fichier: {str(e)}")
-    
-    # Étape 3 : Notification (simulée)
-    print(f"Notification: Nouveau personnage {p.nom} (niveau: {niveau})")
-    
-    return {
-        "message": "Personnage enregistré avec succès",
-        "data": personnage_enrichi
-    }
+def calculer_niveau(score: int) -> Niveau:
+    if score < 50:
+        return Niveau.FAIBLE
+    elif score < 80:
+        return Niveau.MOYEN
+    else:
+        return Niveau.FORT
+def archiver_personnage(personnage: PersonnageOutput, fichier="webhook_log.json"):
+    data = []
+    if os.path.exists(fichier):
+        try:
+            with open(fichier, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError:
+            pass
+    data.append(personnage.dict())
+    with open(fichier, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+def enregistrer_notification(message: str, fichier="notifications.txt"):
+    with open(fichier, "a", encoding="utf-8") as f:
+        f.write(message + "\n")
+app = FastAPI()
+notifications_activées = {"active": True}
+
+@app.post("/webhook/personnage", response_model=PersonnageOutput)
+def recevoir_personnage(p: PersonnageInput):
+    niveau = calculer_niveau(p.score)
+    personnage = PersonnageOutput(**p.dict(), niveau=niveau)
+    archiver_personnage(personnage)
+    print("✅ Personnage ajouté avec succès !")
+
+    if notifications_activées["active"]:
+        notifier(personnage)
+
+    return personnage
+
+@app.post("/notifier")
+def notifier(personnage: PersonnageOutput):
+    message = f"📣 Nouveau personnage : {personnage.nom} - Niveau {personnage.niveau}"
+    print(message)
+    enregistrer_notification(message)
+    return {"message": "Notification envoyée"}
+
+@app.post("/subscribe")
+def subscribe(active: bool):
+    notifications_activées["active"] = active
+    return {"message": f"Notifications {'activées' if active else 'désactivées'}"}
